@@ -1,0 +1,56 @@
+use crate::helper;
+use gl33::*;
+use tobj;
+
+struct Object {
+    vertex_data: Vec<f32>,
+    pub ebo: helper::Buffer,
+}
+
+impl Object {
+    pub fn new(gl: &GlFns, path: &str) -> Self {
+        let (models, _) = tobj::load_obj(
+            path,
+            &tobj::LoadOptions {
+                triangulate: true,
+                single_index: true,
+                ..Default::default()
+            },
+        )
+        .expect("Failed to load OBJ");
+
+        let mesh = &models[0].mesh;
+
+        let positions = &mesh.positions;
+        let normals = &mesh.normals;
+        let texcoords = &mesh.texcoords;
+        let indices = &mesh.indices;
+
+        let mut vertex_data: Vec<f32> = vec![];
+        for i in 0..(positions.len() / 3) {
+            vertex_data.push(positions[3 * i]);
+            vertex_data.push(positions[3 * i + 1]);
+            vertex_data.push(positions[3 * i + 2]);
+
+            vertex_data.push(normals[3 * i]);
+            vertex_data.push(normals[3 * i + 1]);
+            vertex_data.push(normals[3 * i + 2]);
+
+            vertex_data.push(texcoords[2 * i]);
+            vertex_data.push(texcoords[2 * i + 1]);
+        }
+        let ebo = helper::Buffer::new(&gl.fns).expect("Couldn't make a VBO");
+        ebo.bind(&gl, GL_ELEMENT_ARRAY_BUFFER);
+        helper::buffer_data(
+            &gl.fns,
+            GL_ARRAY_BUFFER,
+            bytemuck::cast_slice(&vertices),
+            GL_STATIC_DRAW,
+        );
+
+        return Self {
+            vertex_data: vertex_data,
+            ebo: 0,
+        };
+    }
+}
