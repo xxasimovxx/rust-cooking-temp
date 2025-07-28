@@ -1,10 +1,14 @@
+/*
+* Possible performance issue creating new vao every object (will keep it that way to make thing
+* elegant and change if performance issue met)
+*/
 use crate::helper::{self, create_texture};
 use gl33::*;
 use tobj;
+#[allow(unused)]
 
 pub struct Object {
     pub indices_len: i32,
-    pub texture: u32,
     pub ebo: helper::Buffer,
     pub vbo: helper::Buffer,
     pub vao: helper::VertexArray,
@@ -28,7 +32,13 @@ impl Object {
         let normals = &mesh.normals;
         let texcoords = &mesh.texcoords;
         let indices = mesh.indices.clone();
-        println!("{} {} {} {}", positions.len(), normals.len(), texcoords.len(), indices.len());
+        println!(
+            "positions: {} normals: {} texcoords: {} indices: {}",
+            positions.len(),
+            normals.len(),
+            texcoords.len(),
+            indices.len()
+        );
 
         let mut vertex_data: Vec<f32> = vec![];
         for i in 0..(positions.len() / 3) {
@@ -98,10 +108,9 @@ impl Object {
             );
             gl.EnableVertexAttribArray(2);
         }
-
+        create_texture(gl, texture_png_path);
         return Self {
             indices_len: indices.len().try_into().unwrap(),
-            texture: create_texture(gl, texture_png_path),
             ebo: ebo,
             vbo: vbo,
             vao: vao,
@@ -113,7 +122,12 @@ impl Object {
             self.vao.bind(gl);
             self.ebo.bind(gl, GL_ELEMENT_ARRAY_BUFFER);
             self.vbo.bind(gl, GL_ARRAY_BUFFER);
-            gl.DrawElements(GL_TRIANGLES, self.indices_len, GL_UNSIGNED_INT, 0 as *const _);
+            gl.DrawElements(
+                GL_TRIANGLES,
+                self.indices_len,
+                GL_UNSIGNED_INT,
+                0 as *const _,
+            );
         }
     }
 }

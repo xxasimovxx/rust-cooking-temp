@@ -3,12 +3,10 @@ use beryllium::*;
 use gl33::*;
 use imagine;
 use std::ffi::CString;
+use ultraviolet::Mat4;
 use video::GlWindow;
 
 const BACKGROUND_COLOR: [f32; 3] = [0.7, 0.7, 0.5];
-pub fn clear_color(gl: &GlFns, r: f32, g: f32, b: f32, a: f32) {
-    unsafe { gl.ClearColor(r, g, b, a) }
-}
 
 pub struct GlFnsWin {
     pub fns: GlFns,
@@ -35,6 +33,25 @@ impl GlFnsWin {
         };
 
         return Self { fns: gl, win: win };
+    }
+
+    pub fn clear_color(&self, r: f32, g: f32, b: f32, a: f32) {
+        clear_color(&self.fns, r, g, b, a);
+    }
+
+    pub fn enable(&self, value: GLenum) {
+        enable_option(&self.fns, value);
+    }
+
+    pub fn get_uniform_location(&self, shader_program: &ShaderProgram, name: &str) -> i32 {
+        get_uniform_location(&self.fns, shader_program, name)
+    }
+    pub fn uniform_mat4fv(&self, uniform_location: i32, mat4: Mat4) {
+        uniform_mat4fv(&self.fns, uniform_location, mat4);
+    }
+
+    pub fn clear(&self, mask: GLbitfield) {
+        clear_gl_bitfield(&self.fns, mask);
     }
 }
 #[derive(Debug)]
@@ -296,5 +313,32 @@ pub fn create_texture(gl: &GlFns, path: &str) -> u32 {
 pub fn print_error(gl: &GlFns) {
     unsafe {
         println!("{:?}", gl.GetError());
+    }
+}
+
+pub fn clear_color(gl: &GlFns, r: f32, g: f32, b: f32, a: f32) {
+    unsafe { gl.ClearColor(r, g, b, a) }
+}
+
+pub fn enable_option(gl: &GlFns, value: GLenum) {
+    unsafe {
+        gl.Enable(value);
+    }
+}
+
+pub fn get_uniform_location(gl: &GlFns, shader_program: &ShaderProgram, name: &str) -> i32 {
+    let uniform_name = CString::new(name).unwrap();
+    unsafe { gl.GetUniformLocation(shader_program.0, uniform_name.as_ptr().cast()) }
+}
+
+pub fn uniform_mat4fv(gl: &GlFns, uniform_location: i32, mat4: Mat4) {
+    unsafe {
+        gl.UniformMatrix4fv(uniform_location, 1, 0, mat4.as_ptr());
+    }
+}
+
+pub fn clear_gl_bitfield(gl: &GlFns, mask: GLbitfield) {
+    unsafe {
+        gl.Clear(mask);
     }
 }
