@@ -1,15 +1,17 @@
 #![allow(unused)]
-use beryllium::*;
+use beryllium::{events::SDL_Keycode, *};
 use gl33::*;
 use imagine;
+use std::collections::HashSet;
 use std::ffi::CString;
-use ultraviolet::Mat4;
+use std::rc::Rc;
+use ultraviolet::{Mat4, Vec3};
 use video::GlWindow;
 
-const BACKGROUND_COLOR: [f32; 3] = [0.7, 0.7, 0.5];
+use crate::collision::Box3D;
 
 pub struct GlFnsWin {
-    pub fns: GlFns,
+    pub fns: Rc<GlFns>,
     pub win: GlWindow,
 }
 
@@ -17,8 +19,8 @@ impl GlFnsWin {
     pub fn new(sdl: &Sdl) -> Self {
         let win_args = video::CreateWinArgs {
             title: "window",
-            width: 800,
-            height: 800,
+            width: 1024,
+            height: 920,
             allow_high_dpi: true,
             borderless: false,
             resizable: false,
@@ -32,7 +34,10 @@ impl GlFnsWin {
             GlFns::load_from(&|c_char_ptr| win.get_proc_address(c_char_ptr.cast())).unwrap()
         };
 
-        return Self { fns: gl, win: win };
+        return Self {
+            fns: Rc::new(gl),
+            win: win,
+        };
     }
 
     pub fn clear_color(&self, r: f32, g: f32, b: f32, a: f32) {
@@ -53,70 +58,87 @@ impl GlFnsWin {
     pub fn clear(&self, mask: GLbitfield) {
         clear_gl_bitfield(&self.fns, mask);
     }
+
+    pub fn print_error(&self){
+
+        print_error(self.fns.clone());
+    }
 }
-#[derive(Debug)]
-pub struct VertexArray(pub u32);
+#[derive(Clone)]
+pub struct VertexArray(pub u32, Rc<GlFns>);
 
 impl VertexArray {
-    pub fn new(gl: &GlFns) -> Option<Self> {
+    pub fn new(gl: Rc<GlFns>) -> Option<Self> {
         let mut vao = 0;
         unsafe {
             gl.GenVertexArrays(1, &mut vao);
         }
 
         if vao != 0 {
-            return Some(Self(vao));
+            return Some(Self(vao, gl.clone()));
         } else {
             return None;
         }
     }
 
-    pub fn bind(&self, gl: &GlFns) {
-        gl.BindVertexArray(self.0)
+    pub fn bind(&self) {
+        self.1.BindVertexArray(self.0)
     }
 
-    pub fn _clear_binding(gl: GlFns) {
-        gl.BindVertexArray(0)
+    pub fn _clear_binding(&self) {
+        self.1.BindVertexArray(0);
     }
 
-    pub fn delete(&self, gl: &GlFns) {
+    pub fn delete(&self) {
         unsafe {
-            gl.DeleteVertexArrays(1, &self.0);
+            self.1.DeleteVertexArrays(1, &self.0);
         }
     }
 }
-#[derive(Debug)]
-pub struct Buffer(pub u32);
+
+impl Drop for VertexArray {
+    fn drop(&mut self) {
+        self.delete();
+    }
+}
+#[derive(Clone)]
+pub struct Buffer(pub u32, Rc<GlFns>);
 
 impl Buffer {
-    pub fn new(gl: &GlFns) -> Option<Self> {
+    pub fn new(gl: Rc<GlFns>) -> Option<Self> {
         let mut buffer = 0;
         unsafe {
             gl.GenBuffers(1, &mut buffer);
         }
         if buffer != 0 {
-            Some(Self(buffer))
+            Some(Self(buffer, gl.clone()))
         } else {
             None
         }
     }
 
-    pub fn bind(&self, gl: &GlFns, ty: GLenum) {
-        unsafe { gl.BindBuffer(ty, self.0) }
+    pub fn bind(&self, ty: GLenum) {
+        unsafe { self.1.BindBuffer(ty, self.0) }
     }
 
-    pub fn clear_binding(gl: &GlFns, ty: GLenum) {
-        unsafe { gl.BindBuffer(ty, 0) }
+    pub fn clear_binding(&self, ty: GLenum) {
+        unsafe { self.1.BindBuffer(ty, 0) }
     }
 
-    pub fn delete(&self, gl: &GlFns) {
+    pub fn delete(&self) {
         unsafe {
-            gl.DeleteBuffers(1, &self.0);
+            self.1.DeleteBuffers(1, &self.0);
         }
     }
 }
 
-pub fn buffer_data(gl: &GlFns, ty: GLenum, data: &[u8], usage: GLenum) {
+impl Drop for Buffer {
+    fn drop(&mut self) {
+        self.delete();
+    }
+}
+
+pub fn buffer_data(gl: Rc<GlFns>, ty: GLenum, data: &[u8], usage: GLenum) {
     unsafe {
         gl.BufferData(
             ty,
@@ -127,20 +149,21 @@ pub fn buffer_data(gl: &GlFns, ty: GLenum, data: &[u8], usage: GLenum) {
     }
 }
 
-pub struct Shader(pub u32);
+#[derive(Clone)]
+pub struct Shader(pub u32, Rc<GlFns>);
 impl Shader {
-    pub fn new(gl: &GlFns, ty: GLenum) -> Option<Self> {
+    pub fn new(gl: Rc<GlFns>, ty: GLenum) -> Option<Self> {
         let shader = gl.CreateShader(ty);
         if shader != 0 {
-            Some(Self(shader))
+            Some(Self(shader, gl.clone()))
         } else {
             None
         }
     }
 
-    pub fn set_source(&self, gl: &GlFns, src: &str) {
+    pub fn set_source(&self, src: &str) {
         unsafe {
-            gl.ShaderSource(
+            self.1.ShaderSource(
                 self.0,
                 1,
                 &(src.as_bytes().as_ptr().cast()),
@@ -149,23 +172,26 @@ impl Shader {
         }
     }
 
-    pub fn compile(&self, gl: &GlFns) {
-        gl.CompileShader(self.0);
+    pub fn compile(&self) {
+        self.1.CompileShader(self.0);
     }
 
-    pub fn compile_success(&self, gl: &GlFns) -> bool {
+    pub fn compile_success(&self) -> bool {
         let mut compiled = 0;
-        unsafe { gl.GetShaderiv(self.0, GL_COMPILE_STATUS, &mut compiled) };
+        unsafe { self.1.GetShaderiv(self.0, GL_COMPILE_STATUS, &mut compiled) };
         compiled == 1
     }
 
-    pub fn info_log(&self, gl: &GlFns) -> String {
+    pub fn info_log(&self) -> String {
         let mut needed_len = 0;
-        unsafe { gl.GetShaderiv(self.0, GL_INFO_LOG_LENGTH, &mut needed_len) };
+        unsafe {
+            self.1
+                .GetShaderiv(self.0, GL_INFO_LOG_LENGTH, &mut needed_len)
+        };
         let mut v: Vec<u8> = Vec::with_capacity(needed_len.try_into().unwrap());
         let mut len_written = 0_i32;
         unsafe {
-            gl.GetShaderInfoLog(
+            self.1.GetShaderInfoLog(
                 self.0,
                 v.capacity().try_into().unwrap(),
                 &mut len_written,
@@ -176,52 +202,66 @@ impl Shader {
         String::from_utf8_lossy(&v).into_owned()
     }
 
-    pub fn delete(self, gl: &GlFns) {
-        gl.DeleteShader(self.0);
+    pub fn delete(&self) {
+        self.1.DeleteShader(self.0);
     }
 
-    pub fn from_source(gl: &GlFns, ty: GLenum, source: &str) -> Result<Self, String> {
+    pub fn from_source(gl: Rc<GlFns>, ty: GLenum, source: &str) -> Result<Self, String> {
         let id = Self::new(gl, ty).ok_or_else(|| "Couldn't allocate new shader".to_string())?;
-        id.set_source(gl, source);
-        id.compile(gl);
-        if id.compile_success(gl) {
+        id.set_source(source);
+        id.compile();
+        if id.compile_success() {
             Ok(id)
         } else {
-            let out = id.info_log(gl);
-            id.delete(gl);
+            let out = id.info_log();
+            id.delete();
             Err(out)
         }
     }
 }
 
-pub struct ShaderProgram(pub u32);
+impl Drop for Shader {
+    fn drop(&mut self) {
+        self.delete();
+    }
+}
+
+#[derive(Clone)]
+pub struct ShaderProgram(pub u32, Rc<GlFns>);
 impl ShaderProgram {
-    pub fn new(gl: &GlFns) -> Option<Self> {
+    pub fn new(gl: Rc<GlFns>) -> Option<Self> {
         let prog = gl.CreateProgram();
-        if prog != 0 { Some(Self(prog)) } else { None }
+        if prog != 0 {
+            Some(Self(prog, gl.clone()))
+        } else {
+            None
+        }
     }
 
-    pub fn attach_shader(&self, gl: &GlFns, shader: &Shader) {
-        gl.AttachShader(self.0, shader.0);
+    pub fn attach_shader(&self, shader: &Shader) {
+        self.1.AttachShader(self.0, shader.0);
     }
 
-    pub fn link_program(&self, gl: &GlFns) {
-        gl.LinkProgram(self.0);
+    pub fn link_program(&self) {
+        self.1.LinkProgram(self.0);
     }
 
-    pub fn link_success(&self, gl: &GlFns) -> bool {
+    pub fn link_success(&self) -> bool {
         let mut success = 0;
-        unsafe { gl.GetProgramiv(self.0, GL_LINK_STATUS, &mut success) };
+        unsafe { self.1.GetProgramiv(self.0, GL_LINK_STATUS, &mut success) };
         success == 1
     }
 
-    pub fn info_log(&self, gl: &GlFns) -> String {
+    pub fn info_log(&self) -> String {
         let mut needed_len = 0;
-        unsafe { gl.GetProgramiv(self.0, GL_INFO_LOG_LENGTH, &mut needed_len) };
+        unsafe {
+            self.1
+                .GetProgramiv(self.0, GL_INFO_LOG_LENGTH, &mut needed_len)
+        };
         let mut v: Vec<u8> = Vec::with_capacity(needed_len.try_into().unwrap());
         let mut len_written = 0_i32;
         unsafe {
-            gl.GetProgramInfoLog(
+            self.1.GetProgramInfoLog(
                 self.0,
                 v.capacity().try_into().unwrap(),
                 &mut len_written,
@@ -232,35 +272,42 @@ impl ShaderProgram {
         String::from_utf8_lossy(&v).into_owned()
     }
 
-    pub fn use_program(&self, gl: &GlFns) {
-        gl.UseProgram(self.0);
+    pub fn use_program(&self) {
+        self.1.UseProgram(self.0);
     }
 
-    pub fn delete(self, gl: &GlFns) {
-        gl.DeleteProgram(self.0);
+    pub fn delete(&self) {
+        self.1.DeleteProgram(self.0);
     }
 
-    pub fn from_vert_frag(gl: &GlFns, vert: &str, frag: &str) -> Result<Self, String> {
-        let p = Self::new(gl).ok_or_else(|| "Couldn't allocate a program".to_string())?;
-        let v = Shader::from_source(gl, GL_VERTEX_SHADER, vert)
+    pub fn from_vert_frag(gl: Rc<GlFns>, vert: &str, frag: &str) -> Result<Self, String> {
+        let p = Self::new(gl.clone()).ok_or_else(|| "Couldn't allocate a program".to_string())?;
+        let v = Shader::from_source(gl.clone(), GL_VERTEX_SHADER, vert)
             .map_err(|e| format!("Vertex Compile Error: {}", e))?;
-        let f = Shader::from_source(gl, GL_FRAGMENT_SHADER, frag)
+        let f = Shader::from_source(gl.clone(), GL_FRAGMENT_SHADER, frag)
             .map_err(|e| format!("Fragment Compile Error: {}", e))?;
-        p.attach_shader(gl, &v);
-        p.attach_shader(gl, &f);
-        p.link_program(gl);
-        v.delete(gl);
-        f.delete(gl);
-        if p.link_success(gl) {
+        p.attach_shader(&v);
+        p.attach_shader(&f);
+        p.link_program();
+        v.delete();
+        f.delete();
+        if p.link_success() {
             Ok(p)
         } else {
-            let out = format!("Program Link Error: {}", p.info_log(gl));
-            p.delete(gl);
+            let out = format!("Program Link Error: {}", p.info_log());
+            p.delete();
             Err(out)
         }
     }
 }
 
+impl Drop for ShaderProgram {
+    fn drop(&mut self) {
+        self.delete();
+    }
+}
+
+#[inline]
 pub fn vec3_uniform(
     gl: &GlFns,
     shader_program: &ShaderProgram,
@@ -274,6 +321,7 @@ pub fn vec3_uniform(
     }
 }
 
+#[inline]
 pub fn create_bitmap_from_png(path: &str) -> imagine::Bitmap {
     let mut f = std::fs::File::open(path).unwrap();
     let mut bytes = vec![];
@@ -283,7 +331,8 @@ pub fn create_bitmap_from_png(path: &str) -> imagine::Bitmap {
     return bitmap;
 }
 
-pub fn create_texture(gl: &GlFns, path: &str) -> u32 {
+//Hehe not dropped
+pub fn create_texture(gl: Rc<GlFns>, path: &str) -> u32 {
     let bitmap = create_bitmap_from_png(path);
     let mut texture = 0;
     unsafe {
@@ -310,35 +359,139 @@ pub fn create_texture(gl: &GlFns, path: &str) -> u32 {
     return texture;
 }
 
-pub fn print_error(gl: &GlFns) {
+#[inline]
+pub fn print_error(gl: Rc<GlFns>) {
     unsafe {
         println!("{:?}", gl.GetError());
     }
 }
 
+#[inline]
 pub fn clear_color(gl: &GlFns, r: f32, g: f32, b: f32, a: f32) {
     unsafe { gl.ClearColor(r, g, b, a) }
 }
 
+#[inline]
 pub fn enable_option(gl: &GlFns, value: GLenum) {
     unsafe {
         gl.Enable(value);
     }
 }
 
+#[inline]
 pub fn get_uniform_location(gl: &GlFns, shader_program: &ShaderProgram, name: &str) -> i32 {
     let uniform_name = CString::new(name).unwrap();
     unsafe { gl.GetUniformLocation(shader_program.0, uniform_name.as_ptr().cast()) }
 }
 
+#[inline]
 pub fn uniform_mat4fv(gl: &GlFns, uniform_location: i32, mat4: Mat4) {
     unsafe {
         gl.UniformMatrix4fv(uniform_location, 1, 0, mat4.as_ptr());
     }
 }
 
+#[inline]
 pub fn clear_gl_bitfield(gl: &GlFns, mask: GLbitfield) {
     unsafe {
         gl.Clear(mask);
+    }
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct EulerFPSCamera {
+    pub position: Vec3,
+    pitch_deg: f32,
+    yaw_deg: f32,
+    pub hitbox: Box3D,
+}
+impl EulerFPSCamera {
+    const UP: Vec3 = Vec3 {
+        x: 0.0,
+        y: 1.0,
+        z: 0.0,
+    };
+
+    fn make_front(&self) -> Vec3 {
+        let pitch_rad = f32::to_radians(self.pitch_deg);
+        let yaw_rad = f32::to_radians(self.yaw_deg);
+        Vec3 {
+            x: yaw_rad.sin() * pitch_rad.cos(),
+            y: pitch_rad.sin(),
+            z: yaw_rad.cos() * pitch_rad.cos(),
+        }
+    }
+
+    fn make_front_perpendicular(&self) -> Vec3 {
+        let pitch_rad = f32::to_radians(self.pitch_deg);
+        let yaw_rad = f32::to_radians(self.yaw_deg);
+        Vec3 {
+            x: yaw_rad.sin() * pitch_rad.cos(),
+            y: 0.0,
+            z: yaw_rad.cos() * pitch_rad.cos(),
+        }
+    }
+
+    pub fn update_orientation(&mut self, d_pitch_deg: f32, d_yaw_deg: f32) {
+        self.pitch_deg = (self.pitch_deg + d_pitch_deg).max(-89.0).min(89.0);
+        self.yaw_deg = (self.yaw_deg + d_yaw_deg) % 360.0;
+    }
+
+    pub fn update_position(&mut self, keys: &HashSet<SDL_Keycode>, distance: f32) {
+        let forward = self.make_front_perpendicular();
+
+        // #[cfg(debug_assertions)]
+        // let forward = self.make_front();
+
+        let cross_normalized = forward.cross(Self::UP).normalized();
+
+        let mut move_vector = keys.iter().copied().fold(
+            Vec3 {
+                x: 0.0,
+                y: 0.0,
+                z: 0.0,
+            },
+            |vec, key| match key.0 {
+                119 => vec + forward,
+                115 => vec - forward,
+                97 => vec - cross_normalized,
+                100 => vec + cross_normalized,
+                _ => vec,
+            },
+        );
+        if !(move_vector.x == 0.0 && move_vector.y == 0.0 && move_vector.z == 0.0) {
+            move_vector = move_vector.normalized();
+            self.hitbox.move_delta(move_vector*distance);
+            self.position += move_vector * distance;
+        }
+    }
+
+    #[inline]
+    pub fn make_view_matrix(&self) -> Mat4 {
+        Mat4::look_at(self.position, self.position + self.make_front(), Self::UP)
+    }
+
+    #[inline]
+    pub fn at_position(position: Vec3) -> Self {
+        let hitbox = Box3D::new(
+            position
+                + Vec3 {
+                    x: 2.1,
+                    y: 100.01,
+                    z: 2.1,
+                },
+            position
+                - Vec3 {
+                    x: 2.1,
+                    y: 100.01,
+                    z: 2.1,
+                },
+        );
+        Self {
+            position,
+            pitch_deg: 0.0,
+            yaw_deg: 0.0,
+            hitbox: hitbox,
+        }
     }
 }

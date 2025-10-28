@@ -2,9 +2,12 @@
 * Possible performance issue creating new vao every object (will keep it that way to make thing
 * elegant and change if performance issue met)
 */
+#![allow(unused, dead_code)]
 use crate::helper::{self, create_texture};
 use gl33::*;
+use std::rc::Rc;
 use tobj;
+use ultraviolet::{Mat4, Vec3, Vec4};
 #[allow(unused)]
 
 pub struct Object {
@@ -15,7 +18,7 @@ pub struct Object {
 }
 
 impl Object {
-    pub fn new(gl: &GlFns, obj_path: &str, texture_png_path: &str) -> Self {
+    pub fn new(gl: Rc<GlFns>, obj_path: &str, texture_png_path: &str, position: Vec3) -> Self {
         let (models, _) = tobj::load_obj(
             obj_path,
             &tobj::LoadOptions {
@@ -32,19 +35,33 @@ impl Object {
         let normals = &mesh.normals;
         let texcoords = &mesh.texcoords;
         let indices = mesh.indices.clone();
-        println!(
-            "positions: {} normals: {} texcoords: {} indices: {}",
-            positions.len(),
-            normals.len(),
-            texcoords.len(),
-            indices.len()
-        );
+        /*
+                println!(
+                    "positions: {} normals: {} texcoords: {} indices: {}",
+                    positions.len(),
+                    normals.len(),
+                    texcoords.len(),
+                    indices.len()
+                );
+        */
 
         let mut vertex_data: Vec<f32> = vec![];
         for i in 0..(positions.len() / 3) {
-            vertex_data.push(positions[3 * i]);
-            vertex_data.push(positions[3 * i + 1]);
-            vertex_data.push(positions[3 * i + 2]);
+            let transform = Mat4::from_translation(position);
+
+            let vec3 = Vec3::from(
+                transform
+                    * Vec4::new(
+                        positions[3 * i],
+                        positions[3 * i + 1],
+                        positions[3 * i + 2],
+                        1.0,
+                    ),
+            );
+
+            vertex_data.push(vec3.x);
+            vertex_data.push(vec3.y);
+            vertex_data.push(vec3.z);
 
             vertex_data.push(normals[3 * i]);
             vertex_data.push(normals[3 * i + 1]);
@@ -54,24 +71,24 @@ impl Object {
             vertex_data.push(texcoords[2 * i + 1]);
         }
 
-        let vao = helper::VertexArray::new(gl).expect("Couldn`t make a VAO");
-        vao.bind(gl);
+        let vao = helper::VertexArray::new(gl.clone()).expect("Couldn`t make a VAO");
+        vao.bind();
 
-        let ebo = helper::Buffer::new(&gl).expect("Couldn't make a EBO");
-        ebo.bind(&gl, GL_ELEMENT_ARRAY_BUFFER);
+        let ebo = helper::Buffer::new(gl.clone()).expect("Couldn't make a EBO");
+        ebo.bind(GL_ELEMENT_ARRAY_BUFFER);
 
         helper::buffer_data(
-            &gl,
+            gl.clone(),
             GL_ELEMENT_ARRAY_BUFFER,
             bytemuck::cast_slice(&indices),
             GL_STATIC_DRAW,
         );
 
-        let vbo = helper::Buffer::new(&gl).expect("Couldn't make a VBO");
-        vbo.bind(&gl, GL_ARRAY_BUFFER);
+        let vbo = helper::Buffer::new(gl.clone()).expect("Couldn't make a VBO");
+        vbo.bind(GL_ARRAY_BUFFER);
 
         helper::buffer_data(
-            &gl,
+            gl.clone(),
             GL_ARRAY_BUFFER,
             bytemuck::cast_slice(&vertex_data),
             GL_STATIC_DRAW,
@@ -117,11 +134,11 @@ impl Object {
         };
     }
 
-    pub fn draw(&self, gl: &GlFns) {
+    pub fn draw(&self, gl: Rc<GlFns>) {
         unsafe {
-            self.vao.bind(gl);
-            self.ebo.bind(gl, GL_ELEMENT_ARRAY_BUFFER);
-            self.vbo.bind(gl, GL_ARRAY_BUFFER);
+            self.vao.bind();
+            self.ebo.bind(GL_ELEMENT_ARRAY_BUFFER);
+            self.vbo.bind(GL_ARRAY_BUFFER);
             gl.DrawElements(
                 GL_TRIANGLES,
                 self.indices_len,
